@@ -1,3 +1,4 @@
 venv
 .env
 analysis/data/MSR_data_cleaned.csv 
+__pycache__
