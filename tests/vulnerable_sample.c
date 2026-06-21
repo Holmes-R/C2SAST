@@ -13,6 +13,10 @@ void process_data(char *input) {
     
     // CWE-134: Format String Vulnerability
     printf(input);
+    
+    // CWE-120: Buffer Overflow (scanf)
+    char buf[10];
+    scanf("%s", buf);
 }
 
 void memory_issues() {
@@ -62,6 +66,11 @@ void memory_leak() {
     // No free(leak)
 }
 
+void weak_random() {
+    // CWE-338: Weak Random Number Generator
+    int r = rand();
+}
+
 int main(int argc, char **argv) {
     if (argc > 1) {
         process_data(argv[1]);
@@ -71,6 +80,7 @@ int main(int argc, char **argv) {
     memory_issues();
     return_stack_address();
     uninitialized_variable();
+    weak_random();
     
     return 0;
 }

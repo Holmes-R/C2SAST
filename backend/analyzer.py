@@ -48,18 +48,40 @@ def analyze_file(file_path: str) -> List[Dict]:
             if cursor.kind == clang.cindex.CursorKind.CALL_EXPR:
                 func_name = cursor.spelling
                 
-                # Buffer Overflow
-                if func_name in ['strcpy', 'strcat', 'gets', 'sprintf', 'vsprintf']:
+                # Weak Random Number Generation
+                if func_name == 'rand':
                     vulns.append({
-                        'name': 'Buffer Overflow',
-                        'cwe': 'CWE-120',
-                        'severity': 'High',
+                        'name': 'Weak Random Number Generator',
+                        'cwe': 'CWE-338',
+                        'severity': 'Medium',
                         'line': line,
                         'snippet': snippet,
-                        'explanation': f"Unsafe function '{func_name}' does not check buffer bounds.",
-                        'mitigation': 'Use secure alternatives like strncpy, strncat, or snprintf.',
-                        'secure_code': '// Secure example:\nstrncpy(dest, src, sizeof(dest)-1);\ndest[sizeof(dest)-1] = \'\\0\';'
+                        'explanation': f"The function '{func_name}' is not cryptographically secure.",
+                        'mitigation': 'Use secure random number generators (e.g., /dev/urandom, arc4random_buf, or equivalent).',
+                        'secure_code': '// Secure example (Linux/Unix):\n// Use getrandom(2) or read from /dev/urandom'
                     })
+                    if func_name == 'scanf':
+                        vulns.append({
+                            'name': 'Potential Buffer Overflow in scanf',
+                            'cwe': 'CWE-120',
+                            'severity': 'Medium',
+                            'line': line,
+                            'snippet': snippet,
+                            'explanation': f"Unsafe function '{func_name}' can lead to buffer overflows if input is not bounded.",
+                            'mitigation': 'Use fgets() or scanf with width specifiers (e.g., scanf("%99s", buf)).',
+                            'secure_code': 'char buf[100];\nscanf("%99s", buf);'
+                        })
+                    else:
+                        vulns.append({
+                            'name': 'Buffer Overflow',
+                            'cwe': 'CWE-120',
+                            'severity': 'High',
+                            'line': line,
+                            'snippet': snippet,
+                            'explanation': f"Unsafe function '{func_name}' does not check buffer bounds.",
+                            'mitigation': 'Use secure alternatives like strncpy, strncat, or snprintf.',
+                            'secure_code': '// Secure example:\nstrncpy(dest, src, sizeof(dest)-1);\ndest[sizeof(dest)-1] = \'\\0\';'
+                        })
                 
                 # Command Injection
                 if func_name in ['system', 'popen']:
