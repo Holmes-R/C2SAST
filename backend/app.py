@@ -1,15 +1,30 @@
 # backend/app.py
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, send_from_directory
 from config import Config
 import os
 import io
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder=None)
 app.config.from_object(Config)
 Config.init_app(app)
 
+# ====================== FRONTEND STATIC FILES ======================
+FRONTEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'frontend'))
+
+@app.route('/')
+def serve_index():
+    return send_from_directory(FRONTEND_DIR, 'index.html')
+
+@app.route('/<path:path>')
+def serve_frontend(path):
+    file_path = os.path.join(FRONTEND_DIR, path)
+    if os.path.isfile(file_path):
+        return send_from_directory(FRONTEND_DIR, path)
+    return send_from_directory(FRONTEND_DIR, 'index.html')
+
+# ====================== API ======================
 def allowed_file(filename):
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in Config.ALLOWED_EXTENSIONS
@@ -20,7 +35,6 @@ def register():
     username = data.get('username')
     if not username:
         return jsonify({'error': 'Username required'}), 400
-    # For now just return a fake token
     token = f"fake-token-{username}"
     return jsonify({'token': token})
 
@@ -58,7 +72,6 @@ def analyze():
     if not allowed_file(file.filename):
         return jsonify({'error': f'File type not allowed. Only {Config.ALLOWED_EXTENSIONS} allowed'}), 400
     
-    # Save file temporarily
     filepath = os.path.join(Config.UPLOAD_FOLDER, file.filename)
     file.save(filepath)
     
@@ -73,7 +86,6 @@ def analyze():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
     finally:
-        # Optional: clean up
         if os.path.exists(filepath):
             os.remove(filepath)
 

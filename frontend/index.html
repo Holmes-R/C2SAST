@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>C2SAST - Vulnerability Scanner</title>
+    <meta name="description" content="Static Code Analysis and Vulnerability Scanner for secure coding.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="toast-container"></div>
+
+    <header class="header-bar glass-panel">
+        <div class="logo-container">
+            <h1 class="gradient-text logo-text">C2SAST</h1>
+            <span class="divider"></span>
+            <span class="subtitle">Vulnerability Scanner</span>
+        </div>
+        <button id="logout-btn" class="btn-ghost hidden">
+            <span class="material-icons-round">logout</span> Logout
+        </button>
+    </header>
+
+    <main id="main-content">
+        <!-- Auth View -->
+        <section id="auth-view" class="view-section active">
+            <div class="auth-hero">
+                <h2 class="gradient-text hero-title">C2SAST</h2>
+                <p class="hero-subtitle">Static Code Analysis</p>
+            </div>
+            
+            <div class="glass-card auth-card">
+                <div class="tabs">
+                    <button class="tab-btn active" data-target="login-form">Login</button>
+                    <button class="tab-btn" data-target="signup-form">Sign Up</button>
+                </div>
+                
+                <div class="tab-content">
+                    <form id="login-form" class="form-panel active" onsubmit="event.preventDefault(); handleAuth('login');">
+                        <h3>Welcome back</h3>
+                        <p class="form-desc">Sign in to continue</p>
+                        <div class="input-group">
+                            <label for="l-user">Username</label>
+                            <input type="text" id="l-user" placeholder="Enter username" required>
+                        </div>
+                        <div class="input-group">
+                            <label for="l-pass">Password</label>
+                            <input type="password" id="l-pass" placeholder="Enter password" required>
+                        </div>
+                        <button type="submit" class="btn-primary" id="btn-login">
+                            <span>Sign In</span>
+                            <span class="material-icons-round">arrow_forward</span>
+                        </button>
+                    </form>
+
+                    <form id="signup-form" class="form-panel" onsubmit="event.preventDefault(); handleAuth('register');">
+                        <h3>Create account</h3>
+                        <p class="form-desc">Start securing your code</p>
+                        <div class="input-group">
+                            <label for="s-user">Username</label>
+                            <input type="text" id="s-user" placeholder="Choose a username" required minlength="3">
+                        </div>
+                        <div class="input-group">
+                            <label for="s-email">Email</label>
+                            <input type="email" id="s-email" placeholder="you@example.com">
+                        </div>
+                        <div class="input-group">
+                            <label for="s-pass">Password</label>
+                            <input type="password" id="s-pass" placeholder="Create a password" required minlength="8">
+                        </div>
+                        <button type="submit" class="btn-primary" id="btn-signup">
+                            <span>Create Account</span>
+                            <span class="material-icons-round">how_to_reg</span>
+                        </button>
+                    </form>
+                </div>
+            </div>
+            <p class="footer-note">Securing code, one scan at a time</p>
+        </section>
+
+        <!-- Scanner View -->
+        <section id="scanner-view" class="view-section hidden">
+            <div class="scanner-container">
+                <h2 class="gradient-text text-center">SAST Scanner</h2>
+                <p class="text-center text-muted mb-8">Upload your C/C++ source file for instant analysis</p>
+                
+                <div class="upload-zone" id="drop-zone">
+                    <input type="file" id="file-input" accept=".c,.cpp,.h,.hpp,.cc" class="hidden-input">
+                    <div class="upload-content">
+                        <span class="material-icons-round upload-icon">cloud_upload</span>
+                        <h3>Drag & Drop your file here</h3>
+                        <p>or click to browse</p>
+                        <span class="supported-files">Supported: .c, .cpp, .h, .hpp, .cc</span>
+                    </div>
+                </div>
+                <div id="upload-progress" class="hidden">
+                    <div class="loader"></div>
+                    <p>Scanning codebase...</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Report View -->
+        <section id="report-view" class="view-section hidden">
+            <div class="report-container">
+                <div class="report-header">
+                    <button class="btn-ghost" onclick="showView('scanner-view')">
+                        <span class="material-icons-round">arrow_back</span> Back
+                    </button>
+                    <h2 class="gradient-text">Scan Report</h2>
+                    <button class="btn-primary" onclick="downloadPDF()" id="btn-pdf">
+                        <span class="material-icons-round">download</span> Download PDF
+                    </button>
+                </div>
+
+                <div class="glass-card file-info-card mb-6">
+                    <div class="flex-row items-center gap-3">
+                        <span class="material-icons-round text-indigo">description</span>
+                        <h3 id="report-filename" class="text-white">filename.c</h3>
+                        <span class="vuln-count text-muted text-sm" id="report-count">— 0 vulnerabilities</span>
+                    </div>
+                </div>
+
+                <div id="no-vuln-state" class="glass-card text-center p-12 hidden mb-6">
+                    <span class="material-icons-round text-green mb-4" style="font-size: 3.5rem;">check_circle</span>
+                    <h3 class="text-green text-xl font-bold">No vulnerabilities found!</h3>
+                </div>
+
+                <div id="vuln-stats" class="stats-grid mb-6 hidden">
+                    <div class="glass-card stat-card border-red">
+                        <h2 class="stat-number text-red" id="stat-high">0</h2>
+                        <p class="stat-label">High</p>
+                    </div>
+                    <div class="glass-card stat-card border-orange">
+                        <h2 class="stat-number text-orange" id="stat-medium">0</h2>
+                        <p class="stat-label">Medium</p>
+                    </div>
+                    <div class="glass-card stat-card border-green">
+                        <h2 class="stat-number text-green" id="stat-low">0</h2>
+                        <p class="stat-label">Low</p>
+                    </div>
+                </div>
+
+                <div id="vuln-details-container" class="hidden">
+                    <h3 class="section-title mb-4 text-white">Details</h3>
+                    <div id="vuln-list" class="vuln-list">
+                        <!-- Vuln cards injected via JS -->
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script src="script.js"></script>
+</body>
+</html>
