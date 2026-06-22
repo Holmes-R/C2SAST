@@ -307,11 +307,44 @@ window.toggleVuln = function(index) {
     }
 };
 
-window.downloadPDF = function() {
-    showToast('PDF Export started...', 'info');
-    setTimeout(() => {
-        showToast('PDF Export is mocked in this demo (Backend lacks /api/export-pdf).', 'success');
-    }, 1500);
+window.downloadPDF = async function() {
+    const scan = state.currentScan;
+    if (!scan || !scan.vulnerabilities || scan.vulnerabilities.length === 0) {
+        showToast('No vulnerabilities to export.', 'error');
+        return;
+    }
+    showToast('Generating PDF...', 'info');
+    try {
+        const response = await fetch(`${API_BASE}/export-pdf`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${state.token}`
+            },
+            body: JSON.stringify({
+                filename: scan.filename || 'scan-report',
+                vulnerabilities: scan.vulnerabilities
+            })
+        });
+        if (!response.ok) {
+            const err = await response.json();
+            showToast(err.error || 'PDF export failed', 'error');
+            return;
+        }
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = (scan.filename || 'scan-report') + '.pdf';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast('PDF downloaded!', 'success');
+    } catch (err) {
+        showToast('Could not connect to server for PDF export', 'error');
+        console.error(err);
+    }
 };
 
 // Utilities
