@@ -83,6 +83,10 @@ def analyze():
     file.save(filepath)
     
     try:
+        # Ensure sibling modules are importable (needed when imported via start.py)
+        backend_dir = os.path.dirname(os.path.abspath(__file__))
+        if backend_dir not in sys.path:
+            sys.path.insert(0, backend_dir)
         from analyzer import analyze_file
         vulns = analyze_file(filepath)
         result = {
