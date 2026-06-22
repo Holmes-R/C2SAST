@@ -117,6 +117,42 @@ void assignment_in_condition(int x) {
     }
 }
 
+struct my_struct {
+    int a;
+    int b;
+};
+
+void more_issues2(char *input) {
+    // CWE-242: Inherently Dangerous Function
+    char *buf = alloca(128);
+
+    access(input, 0);  // CWE-367: TOCTOU Race Condition (access then fopen)
+    fopen(input, "r");
+
+    // CWE-772: fopen without fclose (file handle leak)
+    fopen(input, "r");
+    // no fclose
+
+    // CWE-665: Uninitialized struct
+    struct my_struct s;
+    s.a = 5;
+
+    // CWE-783: Operator Precedence Error
+    int flags = 3;
+    if (flags & 2 == 2) {
+        process_data("precedence bug");
+    }
+
+    // CWE-835: Infinite Loop (while(1) without break)
+    while (1) {
+        process_data("forever");
+    }
+
+    // CWE-704: Suspicious Pointer Cast
+    int *int_ptr = &flags;
+    float *float_ptr = (float*)int_ptr;
+}
+
 int main(int argc, char **argv) {
     if (argc > 1) {
         process_data(argv[1]);
@@ -130,6 +166,7 @@ int main(int argc, char **argv) {
     switch_issues(argc);
     fixed_address();
     assignment_in_condition(argc);
+    more_issues2(argv[1]);
     
     return 0;
 }

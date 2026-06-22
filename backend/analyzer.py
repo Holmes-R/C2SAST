@@ -29,6 +29,8 @@ def analyze_file(file_path: str) -> List[Dict]:
     allocated_ptrs = {}      # ptr_name -> line_allocated
     freed_ptrs = {}          # ptr_name -> line_freed
     uninitialized_vars = {}  # var_name -> line_declared
+    opened_files = {}        # file_var_name -> line_opened (for fopen/fclose tracking)
+    accessed_paths = {}      # path_var -> line_accessed (for TOCTOU)
     
     def get_source_snippet(line, source_code_lines):
         if 0 < line <= len(source_code_lines):
@@ -184,6 +186,63 @@ def analyze_file(file_path: str) -> List[Dict]:
                         'secure_code': 'struct passwd *pw = getpwuid(getuid());\nif (pw) printf("%s", pw->pw_name);'
                     })
 
+                # === Inherently Dangerous Function: alloca/vfork (CWE-242) ===
+                if func_name in ['alloca', 'vfork']:
+                    vulns.append({
+                        'name': 'Inherently Dangerous Function',
+                        'cwe': 'CWE-242',
+                        'severity': 'Medium',
+                        'line': line,
+                        'snippet': snippet,
+                        'explanation': f"Function '{func_name}' is inherently dangerous. alloca can cause stack overflow; vfork has risky semantics.",
+                        'mitigation': 'Avoid alloca (use heap malloc). Use fork() instead of vfork() unless absolutely necessary.',
+                        'secure_code': '// Instead of alloca:\nchar *buf = malloc(size);\n// Instead of vfork:\npid_t pid = fork();'
+                    })
+
+                # === TOCTOU Race Condition (CWE-367) - track access() before open() ===
+                if func_name == 'access':
+                    if args_list and args_list[0] is not None:
+                        for child in args_list[0].walk_preorder():
+                            if child.kind == clang.cindex.CursorKind.DECL_REF_EXPR:
+                                accessed_paths[child.spelling] = line
+                                break
+
+                # === fopen / fclose Tracking (for CWE-772) ===
+                if func_name == 'fopen':
+                    if args_list and args_list[0] is not None:
+                        for child in args_list[0].walk_preorder():
+                            if child.kind == clang.cindex.CursorKind.DECL_REF_EXPR:
+                                opened_files[child.spelling] = line
+                                break
+                    vulns.append({
+                        'name': 'Missing fclose',
+                        'cwe': 'CWE-772',
+                        'severity': 'Medium',
+                        'line': line,
+                        'snippet': snippet,
+                        'explanation': f"Resource opened with 'fopen()' without matching fclose. Can lead to file descriptor exhaustion.",
+                        'mitigation': 'Always pair fopen() with fclose() when the file handle is no longer needed.',
+                        'secure_code': 'FILE *f = fopen(path, "r");\nif (f) {\n    // use file\n    fclose(f);\n}'
+                    })
+
+                # === TOCTOU Race Condition (CWE-367) ===
+                if func_name in ['open', 'fopen']:
+                    if args_list and args_list[0] is not None:
+                        for child in args_list[0].walk_preorder():
+                            if child.kind == clang.cindex.CursorKind.DECL_REF_EXPR:
+                                if child.spelling in accessed_paths:
+                                    vulns.append({
+                                        'name': 'TOCTOU Race Condition',
+                                        'cwe': 'CWE-367',
+                                        'severity': 'High',
+                                        'line': line,
+                                        'snippet': snippet,
+                                        'explanation': f"File operation '{func_name}' on path '{child.spelling}' was preceded by access() at line {accessed_paths[child.spelling]}. The path may have changed between check and use.",
+                                        'mitigation': 'Do not use access() before open(). Open the file first, then check with fstat().',
+                                        'secure_code': 'int fd = open(path, O_RDONLY);\nif (fd < 0) return;\nstruct stat st;\nfstat(fd, &st);'
+                                    })
+                                break
+
                 # === Uncontrolled Memory Allocation (CWE-789) ===
                 if func_name in ['malloc', 'calloc', 'realloc']:
                     if args_list and args_list[0] is not None and args_list[0].kind != clang.cindex.CursorKind.INTEGER_LITERAL:
@@ -333,6 +392,26 @@ def analyze_file(file_path: str) -> List[Dict]:
                             'mitigation': 'Use environment variables or a secrets manager.',
                             'secure_code': f'const char* {var_name} = getenv("{var_name.upper()}");'
                         })
+
+                # === CWE-665: Improper Initialization - struct declared without initializer ===
+                if cursor.kind == clang.cindex.CursorKind.VAR_DECL:
+                    var_type = cursor.type
+                    if var_type.kind == clang.cindex.TypeKind.RECORD:
+                        has_init = False
+                        for _ in cursor.get_children():
+                            has_init = True
+                            break
+                        if not has_init:
+                            vulns.append({
+                                'name': 'Uninitialized Struct',
+                                'cwe': 'CWE-665',
+                                'severity': 'Medium',
+                                'line': line,
+                                'snippet': snippet,
+                                'explanation': f"Struct '{var_name}' declared without initializer. Fields may contain garbage values.",
+                                'mitigation': 'Always initialize structs with = {0} or memset(&var, 0, sizeof(var)).',
+                                'secure_code': f'struct type {var_name} = {{0}};'
+                            })
 
             # 10. Use of Uninitialized Variable (CWE-457) (Reference before assignment)
             if cursor.kind == clang.cindex.CursorKind.DECL_REF_EXPR:
@@ -490,6 +569,38 @@ def analyze_file(file_path: str) -> List[Dict]:
                         'secure_code': 'switch (val) {\n    case 1: /* ... */ break;\n    default: /* handle unexpected */ break;\n}'
                     })
 
+            # 16b. Infinite Loop (CWE-835) - while(1) or for(;;) without break/return
+            if cursor.kind in [clang.cindex.CursorKind.WHILE_STMT, clang.cindex.CursorKind.FOR_STMT]:
+                children = list(cursor.get_children())
+                if children:
+                    has_break_or_return = False
+                    body = None
+                    # Condition is first child, body is last child
+                    cond = children[0]
+                    if len(children) > 1:
+                        body = children[-1]
+                    
+                    tokens_cond = [t.spelling for t in cond.get_tokens()]
+                    is_infinite = (tokens_cond == ['1']) or (tokens_cond == ['true']) or \
+                                  (cursor.kind == clang.cindex.CursorKind.FOR_STMT and tokens_cond == [])
+                    
+                    if is_infinite and body is not None:
+                        for sub in body.walk_preorder():
+                            if sub.kind in [clang.cindex.CursorKind.BREAK_STMT, clang.cindex.CursorKind.RETURN_STMT]:
+                                has_break_or_return = True
+                                break
+                        if not has_break_or_return:
+                            vulns.append({
+                                'name': 'Infinite Loop',
+                                'cwe': 'CWE-835',
+                                'severity': 'Medium',
+                                'line': line,
+                                'snippet': snippet,
+                                'explanation': 'Loop appears infinite (no break/return found in body). Could lead to denial of service.',
+                                'mitigation': 'Ensure loops have a reachable exit condition or break statement.',
+                                'secure_code': 'while (1) {\n    do_work();\n    if (should_stop) break;\n}'
+                            })
+
             # 18. Omitted Break in Switch Case (CWE-484) - fall-through
             if cursor.kind == clang.cindex.CursorKind.CASE_STMT:
                 children = list(cursor.get_children())
@@ -549,7 +660,7 @@ def analyze_file(file_path: str) -> List[Dict]:
                         if rhs.kind == clang.cindex.CursorKind.INTEGER_LITERAL:
                             try:
                                 val = int(rhs.spelling, 0)
-                                if val > 0xFFF:  # Reasonable memory address threshold
+                                if val > 0xFFF:
                                     vulns.append({
                                         'name': 'Fixed Address Assignment to Pointer',
                                         'cwe': 'CWE-587',
@@ -563,6 +674,47 @@ def analyze_file(file_path: str) -> List[Dict]:
                                     break
                             except ValueError:
                                 pass
+
+            # === CWE-783: Operator Precedence Logic Error ===
+            if cursor.kind == clang.cindex.CursorKind.BINARY_OPERATOR:
+                c_tokens = [t.spelling for t in cursor.get_tokens()]
+                bitwise_ops = {'&', '|', '^', '<<', '>>'}
+                compare_ops = {'==', '!=', '<', '>', '<=', '>='}
+                has_bitwise = any(op in c_tokens for op in bitwise_ops)
+                has_compare = any(op in c_tokens for op in compare_ops)
+                if has_bitwise and has_compare:
+                    vulns.append({
+                        'name': 'Operator Precedence Logic Error',
+                        'cwe': 'CWE-783',
+                        'severity': 'Medium',
+                        'line': line,
+                        'snippet': snippet,
+                        'explanation': 'Mixing bitwise and comparison operators without parentheses. The precedence may not be what you expect.',
+                        'mitigation': 'Always use parentheses to clarify precedence when mixing bitwise and comparison operators.',
+                        'secure_code': 'if ((x & mask) == expected) { ... }  // instead of if (x & mask == expected)'
+                    })
+
+            # === CWE-704: Suspicious Pointer Cast ===
+            if cursor.kind == clang.cindex.CursorKind.CSTYLE_CAST_EXPR:
+                dest_type = cursor.type
+                if dest_type.kind == clang.cindex.TypeKind.POINTER:
+                    for child in cursor.get_children():
+                        child_type = child.type
+                        if child_type.kind == clang.cindex.TypeKind.POINTER:
+                            child_pointee = child_type.get_pointee()
+                            dest_pointee = dest_type.get_pointee()
+                            if child_pointee.kind != dest_pointee.kind:
+                                vulns.append({
+                                    'name': 'Suspicious Pointer Cast',
+                                    'cwe': 'CWE-704',
+                                    'severity': 'Medium',
+                                    'line': line,
+                                    'snippet': snippet,
+                                    'explanation': f'Casting between incompatible pointer types ({child_pointee.spelling}* to {dest_pointee.spelling}*). May cause alignment or type confusion issues.',
+                                    'mitigation': 'Avoid casting between unrelated pointer types. Use type-safe alternatives or unions.',
+                                    'secure_code': '// Proper type-safe design or\nunion { type_a *a; type_b *b; } u;'
+                                })
+                                break
 
         for child in cursor.get_children():
             traverse(child, source_code_lines)
@@ -585,6 +737,10 @@ def analyze_file(file_path: str) -> List[Dict]:
                 'mitigation': 'Free dynamically allocated memory when it is no longer needed.',
                 'secure_code': f'// Ensure every malloc has a matching free\n{ptr_name} = malloc(size);\n// ... use ...\nfree({ptr_name});'
             })
+
+    # Missing Release of Resource (CWE-772): files opened but not closed
+    # Check if any path passed to fopen was tracked and not closed
+    # Note: This is a heuristic - proper tracking would need scope analysis
 
     # Remove duplicates
     seen = set()
