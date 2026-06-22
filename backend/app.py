@@ -1,7 +1,10 @@
 # backend/app.py
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from config import Config
 import os
+import io
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
 
 app = Flask(__name__)
 app.config.from_object(Config)
@@ -20,6 +23,28 @@ def register():
     # For now just return a fake token
     token = f"fake-token-{username}"
     return jsonify({'token': token})
+
+@app.route('/api/export-pdf', methods=['POST'])
+def export_pdf():
+    data = request.get_json()
+    filename = data.get('filename', 'report.pdf')
+    vulnerabilities = data.get('vulnerabilities', [])
+    
+    buffer = io.BytesIO()
+    p = canvas.Canvas(buffer, pagesize=letter)
+    p.drawString(100, 750, f"Scan Report: {filename}")
+    
+    y = 700
+    for i, v in enumerate(vulnerabilities):
+        p.drawString(100, y, f"{i+1}. {v['name']} (Severity: {v['severity']})")
+        y -= 20
+        if y < 100:
+            p.showPage()
+            y = 750
+            
+    p.save()
+    buffer.seek(0)
+    return send_file(buffer, as_attachment=True, download_name=f"{filename}.pdf", mimetype='application/pdf')
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze():

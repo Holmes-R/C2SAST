@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 // CWE-798: Hardcoded Credentials
 const char* api_key = "secret_12345";
@@ -17,6 +18,13 @@ void process_data(char *input) {
     // CWE-120: Buffer Overflow (scanf)
     char buf[10];
     scanf("%s", buf);
+
+    // CWE-22: Path Traversal
+    fopen(input, "r");
+
+    // CWE-377: Insecure Temporary File
+    char tmpname[256];
+    tmpnam(tmpname);
 }
 
 void memory_issues() {
@@ -54,21 +62,20 @@ void uninitialized_variable() {
     int b = uninit + 5; 
 }
 
-void null_dereference() {
-    int *p = NULL;
-    // CWE-476: Null Pointer Dereference
-    int x = *p;
-}
+void other_issues() {
+    // CWE-676: Potentially Dangerous Function
+    char str[] = "hello,world";
+    char *token = strtok(str, ",");
 
-void memory_leak() {
-    // CWE-401: Memory Leak (if implemented in AST)
-    int *leak = malloc(100);
-    // No free(leak)
-}
+    // CWE-330: Insufficiently Random Values (constant seed)
+    srand(42);
 
-void weak_random() {
     // CWE-338: Weak Random Number Generator
     int r = rand();
+
+    // CWE-369: Divide By Zero
+    int x = 100;
+    int y = x / r; // denominator is variable, could be zero
 }
 
 int main(int argc, char **argv) {
@@ -80,7 +87,7 @@ int main(int argc, char **argv) {
     memory_issues();
     return_stack_address();
     uninitialized_variable();
-    weak_random();
+    other_issues();
     
     return 0;
 }

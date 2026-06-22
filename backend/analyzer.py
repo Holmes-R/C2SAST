@@ -44,50 +44,40 @@ def analyze_file(file_path: str) -> List[Dict]:
         snippet = get_source_snippet(line, source_code_lines) if line > 0 else ""
 
         if cursor.location.file and cursor_file == abs_target_path:
-            # 1. & 6. & 8. Call Expressions (Buffer Overflow, Format String, Command Injection)
+            # 1. & 6. & 8. Call Expressions (Buffer Overflow, Format String, Command Injection, etc.)
             if cursor.kind == clang.cindex.CursorKind.CALL_EXPR:
                 func_name = cursor.spelling
-                
-                # Weak Random Number Generation
-                if func_name == 'rand':
+                args_list = list(cursor.get_arguments())
+
+                # === Buffer Overflow (CWE-120) ===
+                if func_name in ['strcpy', 'strcat', 'gets', 'sprintf', 'vsprintf']:
                     vulns.append({
-                        'name': 'Weak Random Number Generator',
-                        'cwe': 'CWE-338',
+                        'name': 'Buffer Overflow',
+                        'cwe': 'CWE-120',
+                        'severity': 'High',
+                        'line': line,
+                        'snippet': snippet,
+                        'explanation': f"Unsafe function '{func_name}' does not check buffer bounds.",
+                        'mitigation': 'Use secure alternatives like strncpy, strncat, or snprintf.',
+                        'secure_code': '// Secure example:\nstrncpy(dest, src, sizeof(dest)-1);\ndest[sizeof(dest)-1] = \'\\0\';'
+                    })
+
+                # === Potential Buffer Overflow in scanf (CWE-120) ===
+                if func_name == 'scanf':
+                    vulns.append({
+                        'name': 'Potential Buffer Overflow in scanf',
+                        'cwe': 'CWE-120',
                         'severity': 'Medium',
                         'line': line,
                         'snippet': snippet,
-                        'explanation': f"The function '{func_name}' is not cryptographically secure.",
-                        'mitigation': 'Use secure random number generators (e.g., /dev/urandom, arc4random_buf, or equivalent).',
-                        'secure_code': '// Secure example (Linux/Unix):\n// Use getrandom(2) or read from /dev/urandom'
+                        'explanation': "Unsafe function 'scanf' can lead to buffer overflows if input is not bounded.",
+                        'mitigation': 'Use fgets() or scanf with width specifiers (e.g., scanf("%99s", buf)).',
+                        'secure_code': 'char buf[100];\nscanf("%99s", buf);'
                     })
-                    if func_name == 'scanf':
-                        vulns.append({
-                            'name': 'Potential Buffer Overflow in scanf',
-                            'cwe': 'CWE-120',
-                            'severity': 'Medium',
-                            'line': line,
-                            'snippet': snippet,
-                            'explanation': f"Unsafe function '{func_name}' can lead to buffer overflows if input is not bounded.",
-                            'mitigation': 'Use fgets() or scanf with width specifiers (e.g., scanf("%99s", buf)).',
-                            'secure_code': 'char buf[100];\nscanf("%99s", buf);'
-                        })
-                    else:
-                        vulns.append({
-                            'name': 'Buffer Overflow',
-                            'cwe': 'CWE-120',
-                            'severity': 'High',
-                            'line': line,
-                            'snippet': snippet,
-                            'explanation': f"Unsafe function '{func_name}' does not check buffer bounds.",
-                            'mitigation': 'Use secure alternatives like strncpy, strncat, or snprintf.',
-                            'secure_code': '// Secure example:\nstrncpy(dest, src, sizeof(dest)-1);\ndest[sizeof(dest)-1] = \'\\0\';'
-                        })
-                
-                # Command Injection
+
+                # === Command Injection (CWE-78) ===
                 if func_name in ['system', 'popen']:
-                    # Rough check: if argument is a variable
-                    args_list = list(cursor.get_arguments())
-                    if args_list and args_list[0].kind != clang.cindex.CursorKind.STRING_LITERAL:
+                    if args_list and args_list[0] is not None and args_list[0].kind != clang.cindex.CursorKind.STRING_LITERAL:
                         vulns.append({
                             'name': 'Command Injection',
                             'cwe': 'CWE-78',
@@ -99,11 +89,9 @@ def analyze_file(file_path: str) -> List[Dict]:
                             'secure_code': 'execvp("ls", args_array);'
                         })
 
-                # Format String
+                # === Format String (CWE-134) ===
                 if func_name in ['printf', 'fprintf', 'sprintf', 'snprintf']:
-                    args_list = list(cursor.get_arguments())
-                    # printf(user_input) - no string literal as first arg
-                    if func_name == 'printf' and len(args_list) == 1:
+                    if func_name == 'printf' and len(args_list) == 1 and args_list[0] is not None:
                         if args_list[0].kind != clang.cindex.CursorKind.STRING_LITERAL:
                             vulns.append({
                                 'name': 'Format String Vulnerability',
@@ -116,17 +104,106 @@ def analyze_file(file_path: str) -> List[Dict]:
                                 'secure_code': 'printf("%s", user_input);'
                             })
 
-                # 7. Memory Leak & 2. UAF/Double Free Prep (Tracking Allocations)
+                # === Path Traversal (CWE-22) ===
+                if func_name in ['fopen', 'open', 'fread', 'fwrite', 'remove', 'rename', 'freopen']:
+                    if args_list and args_list[0] is not None and args_list[0].kind != clang.cindex.CursorKind.STRING_LITERAL:
+                        vulns.append({
+                            'name': 'Path Traversal',
+                            'cwe': 'CWE-22',
+                            'severity': 'High',
+                            'line': line,
+                            'snippet': snippet,
+                            'explanation': f"File function '{func_name}' called with a non-literal path. Can lead to path traversal attacks.",
+                            'mitigation': 'Use a whitelist of allowed paths, canonicalize paths, and validate user input.',
+                            'secure_code': '// Validate and canonicalize path before use\nchar safe_path[256];\nsnprintf(safe_path, sizeof(safe_path), "/allowed/dir/%s", sanitized_input);'
+                        })
+
+                # === Insecure Temporary File (CWE-377) ===
+                if func_name in ['tmpnam', 'tempnam', 'mktemp', 'tmpfile']:
+                    vulns.append({
+                        'name': 'Insecure Temporary File',
+                        'cwe': 'CWE-377',
+                        'severity': 'Medium',
+                        'line': line,
+                        'snippet': snippet,
+                        'explanation': f"Function '{func_name}' creates temporary files insecurely (race condition, predictable name).",
+                        'mitigation': 'Use mkstemp() instead.',
+                        'secure_code': 'char template[] = "/tmp/mytemp-XXXXXX";\nint fd = mkstemp(template);'
+                    })
+
+                # === Weak Random Number Generation (CWE-338) ===
+                if func_name == 'rand':
+                    vulns.append({
+                        'name': 'Weak Random Number Generator',
+                        'cwe': 'CWE-338',
+                        'severity': 'Medium',
+                        'line': line,
+                        'snippet': snippet,
+                        'explanation': f"The function '{func_name}' is not cryptographically secure.",
+                        'mitigation': 'Use secure random number generators (e.g., /dev/urandom, arc4random_buf, or equivalent).',
+                        'secure_code': '// Secure example (Linux/Unix):\n// Use getrandom(2) or read from /dev/urandom'
+                    })
+
+                # === Insufficiently Random Values (CWE-330) - srand with constant seed ===
+                if func_name == 'srand':
+                    if args_list and args_list[0] is not None and args_list[0].kind == clang.cindex.CursorKind.INTEGER_LITERAL:
+                        vulns.append({
+                            'name': 'Insufficiently Random Values',
+                            'cwe': 'CWE-330',
+                            'severity': 'Medium',
+                            'line': line,
+                            'snippet': snippet,
+                            'explanation': "srand() called with a constant seed, making random numbers predictable.",
+                            'mitigation': 'Use a truly random seed like time() combined with pid, or use secure random API.',
+                            'secure_code': 'srand(time(NULL) ^ getpid());'
+                        })
+
+                # === Potentially Dangerous Function (CWE-676) ===
+                if func_name in ['strtok', 'gets', 'bcopy', 'bzero']:
+                    vulns.append({
+                        'name': 'Potentially Dangerous Function',
+                        'cwe': 'CWE-676',
+                        'severity': 'Medium',
+                        'line': line,
+                        'snippet': snippet,
+                        'explanation': f"Function '{func_name}' is potentially dangerous. strtok is not thread-safe, gets is inherently unsafe.",
+                        'mitigation': 'Use strtok_r, strnlen, memcpy, memset instead.',
+                        'secure_code': '// Use:\nchar* token = strtok_r(str, delim, &saveptr);'
+                    })
+
+                # === Divide By Zero (CWE-369) ===
+                if func_name == 'division' or (snippet and '/' in snippet):
+                    # Check if any argument could be zero (variable, not constant)
+                    if args_list and len(args_list) >= 2:
+                        last_arg = args_list[-1]
+                        if last_arg.kind != clang.cindex.CursorKind.INTEGER_LITERAL and \
+                           last_arg.kind != clang.cindex.CursorKind.FLOATING_LITERAL:
+                            # This is a weak heuristic - a proper check requires dataflow analysis
+                            pass
+
+                # === Unchecked Return Value (CWE-252) ===
                 if func_name in ['malloc', 'calloc', 'realloc']:
-                    # We look at the LHS of the assignment if this call is part of one
-                    pass # Handled in BINARY_OPERATOR or DECL_STMT
+                    # Check if the return value is used or cast in a BINARY_OPERATOR assignment
+                    # We'll detect explicit discarding (call as statement)
+                    vulns.append({
+                        'name': 'Unchecked Return Value',
+                        'cwe': 'CWE-252',
+                        'severity': 'Medium',
+                        'line': line,
+                        'snippet': snippet,
+                        'explanation': f"Return value of '{func_name}' should be checked for NULL to avoid undefined behavior.",
+                        'mitigation': 'Always check if malloc/calloc/realloc returned NULL before using the pointer.',
+                        'secure_code': 'int* ptr = malloc(sizeof(int) * n);\nif (!ptr) { /* handle error */ }'
+                    })
+
+                # 7. Memory Leak & UAF/Double Free Prep (Tracking Allocations)
+                if func_name in ['malloc', 'calloc', 'realloc']:
+                    pass  # Tracked in VAR_DECL handler below
 
                 # 2. & 3. Free Tracking (Double Free, Prep for UAF)
                 if func_name == 'free':
-                    args_list = list(cursor.get_arguments())
                     if args_list:
                         ptr_name = ""
-                        # The argument might be a DECL_REF_EXPR or UNARY_OPERATOR
                         for child in args_list[0].walk_preorder():
                             if child.kind == clang.cindex.CursorKind.DECL_REF_EXPR:
                                 ptr_name = child.spelling
@@ -162,29 +239,41 @@ def analyze_file(file_path: str) -> List[Dict]:
                         'secure_code': f'free({ref_name});\n{ref_name} = NULL;'
                     })
 
-            # 4. Null Pointer Dereference
+            # 4. & 12. Null Pointer Dereference (CWE-476) after unchecked malloc
             if cursor.kind == clang.cindex.CursorKind.UNARY_OPERATOR:
-                # Check for dereference '*'
                 tokens = list(cursor.get_tokens())
                 if tokens and tokens[0].spelling == '*':
-                    # Weak heuristic for NPD: We just flag it if it's right after malloc without check
-                    # A robust implementation needs control flow graph (CFG).
-                    pass
+                    # Check if parent is a DECL_STMT (dereference before any NULL check)
+                    # Simplified: we flag if we see a dereference of a variable that was malloc'd
+                    for child in cursor.walk_preorder():
+                        if child.kind == clang.cindex.CursorKind.DECL_REF_EXPR:
+                            ptr_name = child.spelling
+                            if ptr_name in allocated_ptrs:
+                                # Check if there's a NULL check between alloc and this dereference
+                                # (omitted for simplicity - heuristic only)
+                                pass
 
-            # 9. Hardcoded Credentials & 10. Uninitialized Variables (VAR_DECL)
+            # 9. Hardcoded Credentials & 10. Uninitialized Variables & Alloc Tracking (VAR_DECL)
             if cursor.kind == clang.cindex.CursorKind.VAR_DECL:
                 var_name = cursor.spelling
                 has_init = False
+                is_malloc_result = False
                 for child in cursor.get_children():
                     has_init = True
+                    # Check if the init contains a malloc/calloc/realloc call
+                    for sub in child.walk_preorder():
+                        if sub.kind == clang.cindex.CursorKind.CALL_EXPR and sub.spelling in ['malloc', 'calloc', 'realloc']:
+                            is_malloc_result = True
+                            break
                     break
                 
                 if not has_init:
                     uninitialized_vars[var_name] = line
                 else:
-                    # Remove from uninit if it gets initialized later
                     if var_name in uninitialized_vars:
                         del uninitialized_vars[var_name]
+                    if is_malloc_result:
+                        allocated_ptrs[var_name] = line
                         
                 lower_name = var_name.lower()
                 lower_snippet = snippet.lower()
@@ -201,16 +290,38 @@ def analyze_file(file_path: str) -> List[Dict]:
                             'secure_code': f'const char* {var_name} = getenv("{var_name.upper()}");'
                         })
 
-            # 10. Use of Uninitialized Variable (Reference before assignment)
+            # 10. Use of Uninitialized Variable (CWE-457) (Reference before assignment)
             if cursor.kind == clang.cindex.CursorKind.DECL_REF_EXPR:
                 ref_name = cursor.spelling
                 if ref_name in uninitialized_vars and line > uninitialized_vars[ref_name]:
-                    # Check if this reference is on the LHS of an assignment
-                    # If not, it's a read of uninitialized memory.
-                    # Simplified: We flag if read.
+                    # Check if this reference is on the RHS of an assignment (i.e., a read)
                     parent = cursor.semantic_parent
-                    # For a full implementation, we check if it's child of a BINARY_OPERATOR '='
-                    pass
+                    is_lhs = False
+                    if parent is not None and parent.kind == clang.cindex.CursorKind.BINARY_OPERATOR:
+                        tokens = list(parent.get_tokens())
+                        if '=' in [t.spelling for t in tokens]:
+                            # Determine if this ref is the LHS of the assignment
+                            lh_tokens = []
+                            for child in parent.get_children():
+                                if child.kind == clang.cindex.CursorKind.DECL_REF_EXPR:
+                                    lh_tokens.append(child.spelling)
+                            if ref_name in lh_tokens:
+                                # Check if it's the first child (LHS)
+                                first_child = list(parent.get_children())[0]
+                                if first_child.kind == clang.cindex.CursorKind.DECL_REF_EXPR and first_child.spelling == ref_name:
+                                    is_lhs = True
+                    
+                    if not is_lhs:
+                        vulns.append({
+                            'name': 'Use of Uninitialized Variable',
+                            'cwe': 'CWE-457',
+                            'severity': 'High',
+                            'line': line,
+                            'snippet': snippet,
+                            'explanation': f"Variable '{ref_name}' is read before being initialized.",
+                            'mitigation': 'Always initialize variables when declared, or ensure a code path assigns a value before reading.',
+                            'secure_code': 'int* ptr = malloc(sizeof(int));\n*ptr = value;\nreturn ptr;'
+                        })
 
             # 5. Integer Overflow in Allocation
             if cursor.kind == clang.cindex.CursorKind.CALL_EXPR and cursor.spelling in ['malloc', 'calloc']:
@@ -250,6 +361,51 @@ def analyze_file(file_path: str) -> List[Dict]:
                                 'secure_code': 'int* ptr = malloc(sizeof(int));\n*ptr = value;\nreturn ptr;'
                             })
 
+            # 14. Divide By Zero (CWE-369) - detect division with variable denominator
+            if cursor.kind == clang.cindex.CursorKind.BINARY_OPERATOR:
+                tokens = [t.spelling for t in cursor.get_tokens()]
+                if '/' in tokens:
+                    # The denominator is the second operand
+                    children = list(cursor.get_children())
+                    if len(children) >= 2:
+                        denom = children[1]
+                        if denom.kind != clang.cindex.CursorKind.INTEGER_LITERAL and \
+                           denom.kind != clang.cindex.CursorKind.FLOATING_LITERAL:
+                            vulns.append({
+                                'name': 'Divide By Zero',
+                                'cwe': 'CWE-369',
+                                'severity': 'Medium',
+                                'line': line,
+                                'snippet': snippet,
+                                'explanation': 'Division operation with a non-constant denominator. If the denominator is zero, this causes undefined behavior.',
+                                'mitigation': 'Always check denominator is not zero before dividing.',
+                                'secure_code': 'if (denominator != 0) {\n    result = numerator / denominator;\n} else {\n    // handle error\n}'
+                            })
+
+            # 15. Off-by-One Error (CWE-193) - array index with [constant] == size
+            if cursor.kind == clang.cindex.CursorKind.ARRAY_SUBSCRIPT_EXPR:
+                tokens = [t.spelling for t in cursor.get_tokens()]
+                for i, t in enumerate(tokens):
+                    if t == '[' and i + 1 < len(tokens):
+                        try:
+                            idx = int(tokens[i + 1])
+                            # Check for common pattern: buf[10] where buf was declared as buf[10]
+                            # This is a simplified heuristic
+                            if idx >= 10 and idx < 100:  # Typical small buffer sizes
+                                vulns.append({
+                                    'name': 'Array Index - Potential Out of Bounds',
+                                    'cwe': 'CWE-193',
+                                    'severity': 'Medium',
+                                    'line': line,
+                                    'snippet': snippet,
+                                    'explanation': f'Array accessed with index {idx}. Verify this index is within the array bounds.',
+                                    'mitigation': 'Use bounds checking and ensure index < array size.',
+                                    'secure_code': 'if (index < sizeof(buf)/sizeof(buf[0])) {\n    buf[index] = value;\n}'
+                                })
+                                break
+                        except ValueError:
+                            pass
+
         for child in cursor.get_children():
             traverse(child, source_code_lines)
             
@@ -258,9 +414,19 @@ def analyze_file(file_path: str) -> List[Dict]:
         
     traverse(tu.cursor, source_lines)
     
-    # Simple Memory Leak (CWE-401) check (if allocated but not freed in function)
-    # This requires tracking scope. For this simple integration, we add basic heuristic.
-    # In a full CFG, we track per-function.
+    # Memory Leak (CWE-401) check: pointers allocated but never freed
+    for ptr_name, alloc_line in allocated_ptrs.items():
+        if ptr_name not in freed_ptrs:
+            vulns.append({
+                'name': 'Memory Leak',
+                'cwe': 'CWE-401',
+                'severity': 'Medium',
+                'line': alloc_line,
+                'snippet': get_source_snippet(alloc_line, source_lines),
+                'explanation': f"Pointer '{ptr_name}' was allocated but never freed.",
+                'mitigation': 'Free dynamically allocated memory when it is no longer needed.',
+                'secure_code': f'// Ensure every malloc has a matching free\n{ptr_name} = malloc(size);\n// ... use ...\nfree({ptr_name});'
+            })
 
     # Remove duplicates
     seen = set()

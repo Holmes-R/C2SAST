@@ -76,6 +76,21 @@ def show_analyzer():
         ).props('accept=.c,.cpp,.h').classes('w-full max-w-md')
 
 
+async def download_pdf(result):
+    try:
+        resp = requests.post(
+            f"{API_BASE}/export-pdf",
+            json=result,
+            headers={'Authorization': f'Bearer {state.token}'}
+        )
+        if resp.status_code == 200:
+            ui.download(resp.content, filename=f"{result.get('filename')}.pdf")
+            ui.notify('✅ PDF downloaded!', type='positive')
+        else:
+            ui.notify(f'Failed to export PDF: {resp.status_code}', type='negative')
+    except Exception as ex:
+        ui.notify(f'Error: {ex}', type='negative')
+
 def display_report(result):
     main_content.clear()
     
@@ -83,6 +98,9 @@ def display_report(result):
         ui.button('← Back to Upload', on_click=show_analyzer).classes('mb-4')
         
         ui.label(f"Report: {result.get('filename', 'Unknown file')}").classes('text-h5 mb-4')
+        
+        # Download PDF button
+        ui.button('Download PDF Report', icon='download', on_click=lambda: download_pdf(result)).classes('mb-4')
         
         vulnerabilities = result.get('vulnerabilities', [])
         if not vulnerabilities:
@@ -128,12 +146,12 @@ main_content = ui.column().classes('w-full items-center p-6')
 def show_login():
     main_content.clear()
     with main_content:
-        with ui.card().classes('w-full max-w-md p-6'):
-            ui.label('Login to C2SAST').classes('text-h5 mb-6')
+        with ui.card().classes('w-full max-w-md p-6 shadow-lg rounded-xl'):
+            ui.label('Welcome to C2SAST').classes('text-h4 font-bold text-center mb-6')
             
             ui.input(
                 label='Username',
-                placeholder='demo_user',
+                placeholder='Enter username',
             ).bind_value(state, 'username').props('outlined').classes('w-full')
             
             ui.input(
@@ -142,7 +160,9 @@ def show_login():
                 password_toggle_button=True,
             ).bind_value(state, 'password').props('outlined').classes('w-full mt-4')
             
-            ui.button('Login / Get Token', on_click=login).props('color=primary').classes('w-full mt-6')
+            with ui.row().classes('w-full mt-6 gap-4'):
+                ui.button('Login', on_click=login).props('color=primary').classes('flex-grow')
+                ui.button('Sign Up', on_click=login).props('color=secondary').classes('flex-grow')
 
 # Start with login
 show_login()
