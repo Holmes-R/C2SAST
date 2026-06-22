@@ -1,6 +1,6 @@
 # C2SAST — Sentinel Static Analysis Security Tool
 
-> **Live Demo:** [https://c2sast.onrender.com/](https://c2sast.onrender.com/)
+> **Live :** [https://c2sast.onrender.com/](https://c2sast.onrender.com/)
 
 A static application security testing (SAST) tool for C/C++ codebases. Scans source files using the Clang AST and reports 30+ vulnerability types mapped to MITRE CWE categories. Built with a Flask API backend and a glassmorphism-styled single-page frontend.
 
