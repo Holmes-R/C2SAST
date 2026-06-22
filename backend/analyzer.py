@@ -171,15 +171,59 @@ def analyze_file(file_path: str) -> List[Dict]:
                         'secure_code': '// Use:\nchar* token = strtok_r(str, delim, &saveptr);'
                     })
 
-                # === Divide By Zero (CWE-369) ===
-                if func_name == 'division' or (snippet and '/' in snippet):
-                    # Check if any argument could be zero (variable, not constant)
-                    if args_list and len(args_list) >= 2:
-                        last_arg = args_list[-1]
-                        if last_arg.kind != clang.cindex.CursorKind.INTEGER_LITERAL and \
-                           last_arg.kind != clang.cindex.CursorKind.FLOATING_LITERAL:
-                            # This is a weak heuristic - a proper check requires dataflow analysis
-                            pass
+                # === Dangerous Function: getlogin() (CWE-558) ===
+                if func_name == 'getlogin':
+                    vulns.append({
+                        'name': 'Use of getlogin()',
+                        'cwe': 'CWE-558',
+                        'severity': 'Medium',
+                        'line': line,
+                        'snippet': snippet,
+                        'explanation': "getlogin() returns an unreliable username. The user identity can be tampered with.",
+                        'mitigation': 'Use getpwuid(getuid()) or rely on environment variables with validation.',
+                        'secure_code': 'struct passwd *pw = getpwuid(getuid());\nif (pw) printf("%s", pw->pw_name);'
+                    })
+
+                # === Uncontrolled Memory Allocation (CWE-789) ===
+                if func_name in ['malloc', 'calloc', 'realloc']:
+                    if args_list and args_list[0] is not None and args_list[0].kind != clang.cindex.CursorKind.INTEGER_LITERAL:
+                        if args_list[0].kind != clang.cindex.CursorKind.UNARY_OPERATOR and \
+                           args_list[0].kind != clang.cindex.CursorKind.BINARY_OPERATOR:
+                            # Size comes from a variable - potential uncontrolled allocation
+                            vulns.append({
+                                'name': 'Uncontrolled Memory Allocation',
+                                'cwe': 'CWE-789',
+                                'severity': 'Medium',
+                                'line': line,
+                                'snippet': snippet,
+                                'explanation': f"Allocation size in '{func_name}' comes from a variable without validation. Could lead to resource exhaustion.",
+                                'mitigation': 'Validate and cap allocation sizes. Use a maximum limit.',
+                                'secure_code': 'if (size > MAX_ALLOC_SIZE) return NULL;\nptr = malloc(size);'
+                            })
+
+                # === sizeof on pointer type (CWE-467) ===
+                if func_name in ['malloc', 'calloc']:
+                    if args_list and len(args_list) >= 1 and args_list[0] is not None:
+                        for child in args_list[0].walk_preorder():
+                            if child.kind == clang.cindex.CursorKind.UNARY_OPERATOR:
+                                c_tokens = list(child.get_tokens())
+                                if c_tokens and c_tokens[0].spelling == '*':
+                                    # sizeof(*ptr) -- correct
+                                    pass
+                            elif child.kind == clang.cindex.CursorKind.DECL_REF_EXPR:
+                                var_type = child.type
+                                if var_type.kind == clang.cindex.TypeKind.POINTER:
+                                    vulns.append({
+                                        'name': 'sizeof on Pointer Type',
+                                        'cwe': 'CWE-467',
+                                        'severity': 'Medium',
+                                        'line': line,
+                                        'snippet': snippet,
+                                        'explanation': f"sizeof({child.spelling}) returns pointer size, not the allocated type size. Use sizeof(*{child.spelling}) instead.",
+                                        'mitigation': 'Always dereference the pointer in sizeof: sizeof(*ptr) instead of sizeof(ptr).',
+                                        'secure_code': 'int *arr = malloc(count * sizeof(*arr));'
+                                    })
+                                    break
 
                 # === Unchecked Return Value (CWE-252) ===
                 if func_name in ['malloc', 'calloc', 'realloc']:
@@ -405,6 +449,120 @@ def analyze_file(file_path: str) -> List[Dict]:
                                 break
                         except ValueError:
                             pass
+
+            # 16. Assignment in Condition (CWE-480) - detect = inside if/while
+            if cursor.kind in [clang.cindex.CursorKind.IF_STMT, clang.cindex.CursorKind.WHILE_STMT]:
+                children = list(cursor.get_children())
+                if children:
+                    cond = children[0]  # First child is the condition
+                    for child in cond.walk_preorder():
+                        if child.kind == clang.cindex.CursorKind.BINARY_OPERATOR:
+                            c_tokens = [t.spelling for t in child.get_tokens()]
+                            if '=' in c_tokens and '==' not in c_tokens:
+                                vulns.append({
+                                    'name': 'Assignment in Condition',
+                                    'cwe': 'CWE-480',
+                                    'severity': 'High',
+                                    'line': line,
+                                    'snippet': snippet,
+                                    'explanation': 'Assignment operator (=) used inside condition expression. Did you mean ==?',
+                                    'mitigation': 'Use == for comparison. If assignment is intended, add explicit parentheses and a comment.',
+                                    'secure_code': 'if (x == 5) { ... }  // comparison\n// OR if ((x = get_value()) != 0) { ... }  // intentional assignment'
+                                })
+                                break
+
+            # 17. Missing Default Case in Switch (CWE-478)
+            if cursor.kind == clang.cindex.CursorKind.SWITCH_STMT:
+                has_default = False
+                for child in cursor.walk_preorder():
+                    if child.kind == clang.cindex.CursorKind.DEFAULT_STMT:
+                        has_default = True
+                        break
+                if not has_default:
+                    vulns.append({
+                        'name': 'Missing Default Case in Switch',
+                        'cwe': 'CWE-478',
+                        'severity': 'Medium',
+                        'line': line,
+                        'snippet': snippet,
+                        'explanation': 'Switch statement has no default case. Unexpected input could fall through unhandled.',
+                        'mitigation': 'Always include a default case to handle unexpected values.',
+                        'secure_code': 'switch (val) {\n    case 1: /* ... */ break;\n    default: /* handle unexpected */ break;\n}'
+                    })
+
+            # 18. Omitted Break in Switch Case (CWE-484) - fall-through
+            if cursor.kind == clang.cindex.CursorKind.CASE_STMT:
+                children = list(cursor.get_children())
+                has_break = False
+                for child in children:
+                    # Check if this case body (COMPOUND_STMT or any stmt) contains a break
+                    for sub in child.walk_preorder():
+                        if sub.kind == clang.cindex.CursorKind.BREAK_STMT:
+                            has_break = True
+                            break
+                    if has_break:
+                        break
+
+                if not has_break:
+                    parent = cursor.semantic_parent
+                    if parent is not None:
+                        sib_children = list(parent.get_children())
+                        is_last = (cursor == sib_children[-1])
+                        if not is_last:
+                            vulns.append({
+                                'name': 'Omitted Break in Switch Case',
+                                'cwe': 'CWE-484',
+                                'severity': 'Medium',
+                                'line': line,
+                                'snippet': snippet,
+                                'explanation': 'Case block does not end with a break statement, causing fall-through to next case.',
+                                'mitigation': 'Always add a break statement at the end of each case block.',
+                                'secure_code': 'case 1:\n    do_something();\n    break;\ncase 2:'
+                            })
+
+            # 19. Assignment of Fixed Address to Pointer (CWE-587) - also in VAR_DECL initializers
+            if cursor.kind == clang.cindex.CursorKind.VAR_DECL:
+                for child in cursor.get_children():
+                    for sub in child.walk_preorder():
+                        if sub.kind == clang.cindex.CursorKind.INTEGER_LITERAL:
+                            try:
+                                val = int(sub.spelling, 0)
+                                if val > 0xFFF:
+                                    vulns.append({
+                                        'name': 'Fixed Address Assignment to Pointer',
+                                        'cwe': 'CWE-587',
+                                        'severity': 'Medium',
+                                        'line': line,
+                                        'snippet': snippet,
+                                        'explanation': f'Pointer assigned a hardcoded memory address ({sub.spelling}). This is not portable and often indicates a bug.',
+                                        'mitigation': 'Do not assign fixed addresses to pointers. Use dynamic memory allocation or defined constants.',
+                                        'secure_code': 'int *ptr = malloc(sizeof(int));\n// OR\nextern int* get_mmio_base(void);'
+                                    })
+                                    break
+                            except ValueError:
+                                pass
+
+            if cursor.kind == clang.cindex.CursorKind.BINARY_OPERATOR:
+                c_tokens = [t.spelling for t in cursor.get_tokens()]
+                if '=' in c_tokens:
+                    for rhs in cursor.walk_preorder():
+                        if rhs.kind == clang.cindex.CursorKind.INTEGER_LITERAL:
+                            try:
+                                val = int(rhs.spelling, 0)
+                                if val > 0xFFF:  # Reasonable memory address threshold
+                                    vulns.append({
+                                        'name': 'Fixed Address Assignment to Pointer',
+                                        'cwe': 'CWE-587',
+                                        'severity': 'Medium',
+                                        'line': line,
+                                        'snippet': snippet,
+                                        'explanation': f'Pointer assigned a hardcoded memory address ({rhs.spelling}). This is not portable and often indicates a bug.',
+                                        'mitigation': 'Do not assign fixed addresses to pointers. Use dynamic memory allocation or defined constants.',
+                                        'secure_code': 'int *ptr = malloc(sizeof(int));\n// OR\nextern int* get_mmio_base(void);'
+                                    })
+                                    break
+                            except ValueError:
+                                pass
 
         for child in cursor.get_children():
             traverse(child, source_code_lines)

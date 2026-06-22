@@ -76,6 +76,45 @@ void other_issues() {
     // CWE-369: Divide By Zero
     int x = 100;
     int y = x / r; // denominator is variable, could be zero
+
+    // CWE-558: Use of getlogin()
+    char *user = getlogin();
+
+    // CWE-789: Uncontrolled Memory Allocation (size from variable)
+    int size = x;
+    int *big = malloc(size);
+
+    // CWE-467: sizeof on pointer type
+    int *arr = malloc(10 * sizeof(arr)); // should be sizeof(*arr)
+}
+
+void switch_issues(int cmd) {
+    // CWE-478: Missing Default Case
+    switch (cmd) {
+        case 1:
+            break;
+    }
+
+    // CWE-484: Omitted Break in Switch Case
+    switch (cmd) {
+        case 1:
+            process_data("hello");
+            // missing break
+        case 2:
+            break;
+    }
+}
+
+void fixed_address() {
+    // CWE-587: Assignment of Fixed Address to Pointer
+    int *dev_ptr = (int*)0x10000000;
+}
+
+void assignment_in_condition(int x) {
+    // CWE-480: Assignment in Condition
+    if (x = 5) {
+        process_data("test");
+    }
 }
 
 int main(int argc, char **argv) {
@@ -88,6 +127,9 @@ int main(int argc, char **argv) {
     return_stack_address();
     uninitialized_variable();
     other_issues();
+    switch_issues(argc);
+    fixed_address();
+    assignment_in_condition(argc);
     
     return 0;
 }
