@@ -1,10 +1,17 @@
 # backend/app.py
 from flask import Flask, request, jsonify, send_file, send_from_directory
-from config import Config
 import os
+import sys
 import io
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
+
+# Handle both direct execution and import from parent
+if __package__ == 'backend' or 'backend' in sys.modules:
+    from backend.config import Config
+else:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from config import Config
 
 app = Flask(__name__, static_folder=None)
 app.config.from_object(Config)

@@ -1,27 +1,12 @@
-import subprocess
 import sys
 import os
-import time
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-PYTHON = os.path.join(BASE, 'venv', 'Scripts', 'python.exe')
-if not os.path.exists(PYTHON):
-    PYTHON = sys.executable
+# Ensure backend module is importable
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-print("Starting Flask server on http://localhost:5000 ...")
-proc = subprocess.Popen([PYTHON, os.path.join(BASE, 'backend', 'app.py')], cwd=BASE)
-time.sleep(2)
+from backend.app import app
 
-print("\n" + "=" * 48)
-print("  Vuln AI is running!")
-print(f"  Open: http://localhost:5000")
-print("  Press Ctrl+C to stop.")
-print("=" * 48 + "\n")
-
-try:
-    proc.wait()
-except KeyboardInterrupt:
-    print("\nShutting down...")
-    proc.terminate()
-    proc.wait()
-    print("Done.")
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    debug = os.environ.get('RENDER', '') == ''
+    app.run(host='0.0.0.0', port=port, debug=debug)
