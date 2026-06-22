@@ -6,8 +6,6 @@ A static application security testing (SAST) tool for C/C++ codebases. Scans sou
 
 ---
 
-## STAR
-
 ### Situation
 Security vulnerabilities in C/C++ codebases — buffer overflows, use-after-free, command injection, and 30+ other CWE-classified flaws — are notoriously hard to catch manually. Developers lacked a fast, self-hosted SAST scanner that could integrate into both CI/CD pipelines and interactive web workflows without requiring a commercial license.
 
